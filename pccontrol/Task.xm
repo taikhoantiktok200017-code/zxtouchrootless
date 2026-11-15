@@ -98,7 +98,7 @@ static BOOL VF5MP4Finalized(NSString *path, unsigned long long *lengthOut) {
             [file seekToFileOffset:offset];
             NSData *data = [file readDataOfLength:16];
             if (data.length < 8) { valid = NO; break; }
-            const unsigned char *p = data.bytes;
+            const unsigned char *p = (const unsigned char *)data.bytes;
             unsigned long long atomSize = ((unsigned long long)p[0]<<24) |
                 ((unsigned long long)p[1]<<16) | ((unsigned long long)p[2]<<8) | p[3];
             unsigned long long headerSize = 8;
