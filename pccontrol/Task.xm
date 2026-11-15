@@ -136,9 +136,9 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                         id currentApp = getFrontMostApplication();
                         if (![currentApp respondsToSelector:@selector(bundleIdentifier)] ||
                             ![[currentApp bundleIdentifier] isEqualToString:@"com.helge.droiddashcam"]) return;
-                        performTouchFromRawData((UInt8*)"11000185005850");
+                        performTouchFromRawData((UInt8*)"11000370011700");
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                            performTouchFromRawData((UInt8*)"10000185005850");
+                            performTouchFromRawData((UInt8*)"10000370011700");
                         });
                     });
                     notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
