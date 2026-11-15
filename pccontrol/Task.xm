@@ -1,4 +1,5 @@
 #include "Task.h"
+#include <math.h>
 #include <roothide.h>
 #include "Touch.h"
 #include "ColorPicker.h"
@@ -109,7 +110,29 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     else if (taskType == TASK_RUN_SHELL)
     {
         @autoreleasepool{
-            if (strcmp((const char *)eventData, "vf5-lock") == 0) {
+            if (strcmp((const char *)eventData, "vf5-stop-test") == 0) {
+                // Test-only command. Never call from a charger automation until
+                // recording state and saved video have been verified on-device.
+                id frontApp = getFrontMostApplication();
+                NSString *bundleId = [frontApp respondsToSelector:@selector(bundleIdentifier)]
+                    ? [frontApp bundleIdentifier] : nil;
+                UIDevice *device = [UIDevice currentDevice];
+                device.batteryMonitoringEnabled = YES;
+                CGSize size = [UIScreen mainScreen].bounds.size;
+                if (![bundleId isEqualToString:@"com.helge.droiddashcam"] ||
+                    device.batteryState == UIDeviceBatteryStateUnknown ||
+                    device.batteryState == UIDeviceBatteryStateUnplugged ||
+                    fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
+                    notifyClient((UInt8*)"1;;Stop test requires Droid foreground, portrait iPhone 7 and external power\r\n", writeStreamRef);
+                } else {
+                    // ZXTouch raw format: count,type,index,x*10,y*10.
+                    performTouchFromRawData((UInt8*)"11000185005860");
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                        performTouchFromRawData((UInt8*)"10000185005860");
+                    });
+                    notifyClient((UInt8*)"0;;Stop tap sent; verify the recording and MP4 manually\r\n", writeStreamRef);
+                }
+            } else if (strcmp((const char *)eventData, "vf5-lock") == 0) {
                 Class managerClass = NSClassFromString(@"SBLockScreenManager");
                 SEL singleton = NSSelectorFromString(@"sharedInstance");
                 SEL lock = NSSelectorFromString(@"lockUIFromSource:withOptions:");
