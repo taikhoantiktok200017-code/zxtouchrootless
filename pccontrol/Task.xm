@@ -14,6 +14,7 @@
 #include "DeviceInfo.h"
 #include "TouchIndicator/TouchIndicatorWindow.h"
 #import <mach/mach.h>
+#import <objc/message.h>
 #include <Foundation/NSDistributedNotificationCenter.h>
 #include <TextRecognization/TextRecognizer.h>
 #include "UpdateCache.h"
@@ -108,8 +109,24 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     else if (taskType == TASK_RUN_SHELL)
     {
         @autoreleasepool{
-            system2([[NSString stringWithFormat:@"%@ -c \"%s\"", jbroot(@"/bin/sh"), eventData] UTF8String], NULL, NULL);
-            notifyClient((UInt8*)"0\r\n", writeStreamRef);
+            if (strcmp((const char *)eventData, "vf5-lock") == 0) {
+                Class managerClass = NSClassFromString(@"SBLockScreenManager");
+                SEL singleton = NSSelectorFromString(@"sharedInstance");
+                SEL lock = NSSelectorFromString(@"lockUIFromSource:withOptions:");
+                id manager = (managerClass && [managerClass respondsToSelector:singleton])
+                    ? ((id (*)(id, SEL))objc_msgSend)(managerClass, singleton) : nil;
+                if (manager && [manager respondsToSelector:lock]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+                    });
+                    notifyClient((UInt8*)"0;;Lock requested\r\n", writeStreamRef);
+                } else {
+                    notifyClient((UInt8*)"1;;SpringBoard lock API unavailable\r\n", writeStreamRef);
+                }
+            } else {
+                system2([[NSString stringWithFormat:@"%@ -c \"%s\"", jbroot(@"/bin/sh"), eventData] UTF8String], NULL, NULL);
+                notifyClient((UInt8*)"0\r\n", writeStreamRef);
+            }
         }
     }
     else if (taskType == TASK_TOUCH_RECORDING_START)
