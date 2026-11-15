@@ -143,6 +143,21 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     });
                     notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
                 }
+            } else if (strcmp((const char *)eventData, "vf5-file-probe") == 0) {
+                Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+                SEL lookup = NSSelectorFromString(@"applicationProxyForIdentifier:");
+                id proxy = (proxyClass && [proxyClass respondsToSelector:lookup])
+                    ? ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, lookup, @"com.helge.droiddashcam") : nil;
+                SEL container = NSSelectorFromString(@"dataContainerURL");
+                NSURL *dataURL = (proxy && [proxy respondsToSelector:container])
+                    ? ((id (*)(id, SEL))objc_msgSend)(proxy, container) : nil;
+                NSString *directory = [[dataURL path] stringByAppendingPathComponent:@"Documents/Temporary"];
+                NSError *error = nil;
+                NSArray *names = directory ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:directory error:&error] : nil;
+                NSString *answer = names
+                    ? [NSString stringWithFormat:@"0;;VF5 probe accessible=%lu path=%@\r\n", (unsigned long)[names count], directory]
+                    : [NSString stringWithFormat:@"1;;VF5 probe dataURL=%@ error=%@\r\n", dataURL, error];
+                notifyClient((UInt8*)[answer UTF8String], writeStreamRef);
             } else if (strcmp((const char *)eventData, "vf5-lock") == 0) {
                 Class managerClass = NSClassFromString(@"SBLockScreenManager");
                 SEL singleton = NSSelectorFromString(@"sharedInstance");
