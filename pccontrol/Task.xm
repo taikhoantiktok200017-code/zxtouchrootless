@@ -110,9 +110,11 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     else if (taskType == TASK_RUN_SHELL)
     {
         @autoreleasepool{
-            if (strcmp((const char *)eventData, "vf5-stop-test") == 0) {
+            if (strcmp((const char *)eventData, "vf5-stop-test") == 0 ||
+                strcmp((const char *)eventData, "vf5-stop-unplug") == 0) {
                 // Test-only command. Never call from a charger automation until
                 // recording state and saved video have been verified on-device.
+                BOOL unplug = strcmp((const char *)eventData, "vf5-stop-unplug") == 0;
                 id frontApp = getFrontMostApplication();
                 NSString *bundleId = [frontApp respondsToSelector:@selector(bundleIdentifier)]
                     ? [frontApp bundleIdentifier] : nil;
@@ -121,16 +123,25 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                 CGSize size = [UIScreen mainScreen].bounds.size;
                 if (![bundleId isEqualToString:@"com.helge.droiddashcam"] ||
                     device.batteryState == UIDeviceBatteryStateUnknown ||
-                    device.batteryState == UIDeviceBatteryStateUnplugged ||
+                    (unplug ? device.batteryState != UIDeviceBatteryStateUnplugged :
+                        device.batteryState == UIDeviceBatteryStateUnplugged) ||
                     fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
                     notifyClient((UInt8*)"1;;Stop test requires Droid foreground, portrait iPhone 7 and external power\r\n", writeStreamRef);
                 } else {
-                    // ZXTouch expects physical pixels (750x1334), not UIKit points (375x667).
-                    performTouchFromRawData((UInt8*)"11000370011720");
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                        performTouchFromRawData((UInt8*)"10000370011720");
+                    // Debounce unplug events; a reconnect must cancel the Stop tap.
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (unplug ? 2 : 0) * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                        device.batteryMonitoringEnabled = YES;
+                        if ((unplug && device.batteryState != UIDeviceBatteryStateUnplugged) ||
+                            (!unplug && device.batteryState == UIDeviceBatteryStateUnplugged)) return;
+                        id currentApp = getFrontMostApplication();
+                        if (![currentApp respondsToSelector:@selector(bundleIdentifier)] ||
+                            ![[currentApp bundleIdentifier] isEqualToString:@"com.helge.droiddashcam"]) return;
+                        performTouchFromRawData((UInt8*)"11000370011720");
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                            performTouchFromRawData((UInt8*)"10000370011720");
+                        });
                     });
-                    notifyClient((UInt8*)"0;;Stop tap sent; verify the recording and MP4 manually\r\n", writeStreamRef);
+                    notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
                 }
             } else if (strcmp((const char *)eventData, "vf5-lock") == 0) {
                 Class managerClass = NSClassFromString(@"SBLockScreenManager");
