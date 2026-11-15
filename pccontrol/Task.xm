@@ -125,10 +125,10 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
                     notifyClient((UInt8*)"1;;Stop test requires Droid foreground, portrait iPhone 7 and external power\r\n", writeStreamRef);
                 } else {
-                    // ZXTouch raw format: count,type,index,x*10,y*10.
-                    performTouchFromRawData((UInt8*)"11000185005860");
+                    // ZXTouch expects physical pixels (750x1334), not UIKit points (375x667).
+                    performTouchFromRawData((UInt8*)"11000370011720");
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                        performTouchFromRawData((UInt8*)"10000185005860");
+                        performTouchFromRawData((UInt8*)"10000370011720");
                     });
                     notifyClient((UInt8*)"0;;Stop tap sent; verify the recording and MP4 manually\r\n", writeStreamRef);
                 }
