@@ -24,6 +24,181 @@
 
 extern CFRunLoopRef recordRunLoop;
 
+static BOOL VF5StopPending = NO;
+
+// The charger shortcut calls this inside SpringBoard. Never lock until the
+// newest recording has a complete MP4 index and has stopped changing.
+static void VF5Log(NSString *message) {
+    NSString *path = @"/var/mobile/Media/Downloads/vf5-automation.log";
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) [fm createFileAtPath:path contents:nil attributes:nil];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    } @catch (NSException *exception) {
+        NSLog(@"VF5 log write failed: %@", exception);
+    }
+    NSLog(@"VF5 %@", message);
+}
+
+static BOOL VF5PowerMatches(BOOL mustBeUnplugged) {
+    UIDevice *device = [UIDevice currentDevice];
+    device.batteryMonitoringEnabled = YES;
+    UIDeviceBatteryState state = device.batteryState;
+    return mustBeUnplugged ? state == UIDeviceBatteryStateUnplugged :
+        (state == UIDeviceBatteryStateCharging || state == UIDeviceBatteryStateFull);
+}
+
+static BOOL VF5DroidForeground(void) {
+    id app = getFrontMostApplication();
+    return [app respondsToSelector:@selector(bundleIdentifier)] &&
+        [[app bundleIdentifier] isEqualToString:@"com.helge.droiddashcam"];
+}
+
+static NSString *VF5LatestRecording(void) {
+    Class cls = NSClassFromString(@"LSApplicationProxy");
+    SEL lookup = NSSelectorFromString(@"applicationProxyForIdentifier:");
+    id proxy = (cls && [cls respondsToSelector:lookup])
+        ? ((id (*)(id, SEL, id))objc_msgSend)(cls, lookup, @"com.helge.droiddashcam") : nil;
+    SEL container = NSSelectorFromString(@"dataContainerURL");
+    NSURL *url = (proxy && [proxy respondsToSelector:container])
+        ? ((id (*)(id, SEL))objc_msgSend)(proxy, container) : nil;
+    NSString *directory = [[url path] stringByAppendingPathComponent:@"Documents/Temporary"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSDate *latestDate = nil;
+    NSString *latestPath = nil;
+    for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
+        if (![[name.pathExtension lowercaseString] isEqualToString:@"mp4"]) continue;
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+        NSDate *modified = attrs[NSFileModificationDate];
+        if (modified && (!latestDate || [modified compare:latestDate] == NSOrderedDescending)) {
+            latestDate = modified;
+            latestPath = path;
+        }
+    }
+    // Never tap Stop for a stale recording or a clip from a previous trip.
+    return (latestDate && -[latestDate timeIntervalSinceNow] <= 60.0) ? latestPath : nil;
+}
+
+static BOOL VF5MP4Finalized(NSString *path, unsigned long long *lengthOut) {
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    unsigned long long length = [attrs[NSFileSize] unsignedLongLongValue];
+    if (lengthOut) *lengthOut = length;
+    if (length < 1024 * 1024) return NO;
+    NSFileHandle *file = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!file) return NO;
+    BOOL ftyp = NO, mdat = NO, moov = NO, valid = YES;
+    unsigned long long offset = 0;
+    @try {
+        for (NSUInteger atom = 0; offset + 8 <= length && atom < 32; atom++) {
+            [file seekToFileOffset:offset];
+            NSData *data = [file readDataOfLength:16];
+            if (data.length < 8) { valid = NO; break; }
+            const unsigned char *p = data.bytes;
+            unsigned long long atomSize = ((unsigned long long)p[0]<<24) |
+                ((unsigned long long)p[1]<<16) | ((unsigned long long)p[2]<<8) | p[3];
+            unsigned long long headerSize = 8;
+            if (atomSize == 1) {
+                if (data.length < 16) { valid = NO; break; }
+                atomSize = 0;
+                for (NSUInteger j = 8; j < 16; j++) atomSize = (atomSize << 8) | p[j];
+                headerSize = 16;
+            } else if (atomSize == 0) {
+                atomSize = length - offset;
+            }
+            if (atomSize < headerSize || atomSize > length - offset) { valid = NO; break; }
+            if (memcmp(p + 4, "ftyp", 4) == 0) ftyp = YES;
+            if (memcmp(p + 4, "mdat", 4) == 0) mdat = YES;
+            if (memcmp(p + 4, "moov", 4) == 0) moov = YES;
+            offset += atomSize;
+        }
+        if (offset != length) valid = NO;
+        [file closeFile];
+    } @catch (NSException *exception) {
+        valid = NO;
+        @try { [file closeFile]; } @catch (NSException *ignored) {}
+    }
+    return valid && ftyp && mdat && moov;
+}
+
+static void VF5WaitForSavedClip(NSString *path, BOOL unplug, NSUInteger tries,
+                                unsigned long long previousLength) {
+    if (!VF5PowerMatches(unplug)) {
+        VF5Log(@"CANCEL power changed before finalizing");
+        VF5StopPending = NO;
+        return;
+    }
+    unsigned long long length = 0;
+    BOOL finalized = VF5MP4Finalized(path, &length);
+    if (finalized && length == previousLength) {
+        if (!unplug) {
+            VF5Log([NSString stringWithFormat:@"PASS test-stop finalized MP4 size=%llu", length]);
+            VF5StopPending = NO;
+            return;
+        }
+        if (!VF5DroidForeground() || !VF5PowerMatches(YES)) {
+            VF5Log(@"CANCEL screen/power changed before lock");
+            VF5StopPending = NO;
+            return;
+        }
+        Class cls = NSClassFromString(@"SBLockScreenManager");
+        SEL shared = NSSelectorFromString(@"sharedInstance");
+        SEL lock = NSSelectorFromString(@"lockUIFromSource:withOptions:");
+        id manager = (cls && [cls respondsToSelector:shared])
+            ? ((id (*)(id, SEL))objc_msgSend)(cls, shared) : nil;
+        if (!manager || ![manager respondsToSelector:lock]) {
+            VF5Log(@"FAIL lock API missing; MP4 saved");
+            VF5StopPending = NO;
+            return;
+        }
+        VF5Log([NSString stringWithFormat:@"PASS finalized MP4 size=%llu; locking", length]);
+        VF5StopPending = NO;
+        ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+        return;
+    }
+    if (tries >= 15) {
+        VF5Log([NSString stringWithFormat:@"FAIL MP4 not finalized/stable after 15s size=%llu", length]);
+        VF5StopPending = NO;
+        return; // Fail open: leave screen on to protect the clip.
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        VF5WaitForSavedClip(path, unplug, tries + 1, finalized ? length : 0);
+    });
+}
+
+static void VF5StopAndVerify(BOOL unplug) {
+    CGSize size = [UIScreen mainScreen].bounds.size;
+    if (fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
+        VF5Log(@"CANCEL not iPhone 7 portrait; Stop coordinates unsafe");
+        VF5StopPending = NO;
+        return;
+    }
+    if (!VF5PowerMatches(unplug) || !VF5DroidForeground()) {
+        VF5Log(@"CANCEL power or foreground not ready");
+        VF5StopPending = NO;
+        return;
+    }
+    NSString *path = VF5LatestRecording();
+    unsigned long long bytes = 0;
+    if (!path || VF5MP4Finalized(path, &bytes)) {
+        VF5Log(@"CANCEL no fresh unfinished MP4; no Stop tap");
+        VF5StopPending = NO;
+        return;
+    }
+    performTouchFromRawData((UInt8*)"11000370011700");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        performTouchFromRawData((UInt8*)"10000370011700");
+        VF5Log(@"Stop tapped; waiting for finalized MP4");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            VF5WaitForSavedClip(path, unplug, 1, 0);
+        });
+    });
+}
+
 /*
 get task type
 */
@@ -111,10 +286,22 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     {
         @autoreleasepool{
             if (strcmp((const char *)eventData, "vf5-stop-test") == 0 ||
-                strcmp((const char *)eventData, "vf5-stop-unplug") == 0) {
+                strcmp((const char *)eventData, "vf5-stop-unplug") == 0 ||
+                strcmp((const char *)eventData, "vf5-stop-verify-test") == 0) {
                 // Test-only command. Never call from a charger automation until
                 // recording state and saved video have been verified on-device.
                 BOOL unplug = strcmp((const char *)eventData, "vf5-stop-unplug") == 0;
+                BOOL verify = unplug || strcmp((const char *)eventData, "vf5-stop-verify-test") == 0;
+                if (verify) {
+                    if (VF5StopPending) {
+                        notifyClient((UInt8*)"1;;VF5 stop already in progress\r\n", writeStreamRef);
+                    } else {
+                        VF5StopPending = YES;
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (unplug ? 2 : 0) * NSEC_PER_SEC),
+                                       dispatch_get_main_queue(), ^{ VF5StopAndVerify(unplug); });
+                        notifyClient((UInt8*)"0;;Stop/MP4 verification queued; lock only on unplug and verified save\r\n", writeStreamRef);
+                    }
+                } else {
                 id frontApp = getFrontMostApplication();
                 NSString *bundleId = [frontApp respondsToSelector:@selector(bundleIdentifier)]
                     ? [frontApp bundleIdentifier] : nil;
@@ -142,6 +329,7 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                         });
                     });
                     notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
+                }
                 }
             } else if (strcmp((const char *)eventData, "vf5-file-probe") == 0) {
                 Class proxyClass = NSClassFromString(@"LSApplicationProxy");
