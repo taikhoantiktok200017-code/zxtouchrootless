@@ -116,10 +116,16 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                 id manager = (managerClass && [managerClass respondsToSelector:singleton])
                     ? ((id (*)(id, SEL))objc_msgSend)(managerClass, singleton) : nil;
                 if (manager && [manager respondsToSelector:lock]) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+                    // Recheck actual power immediately before locking: a stale unplug event
+                    // must never lock the screen after the charger is reconnected.
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                        UIDevice *device = [UIDevice currentDevice];
+                        device.batteryMonitoringEnabled = YES;
+                        if (device.batteryState == UIDeviceBatteryStateUnplugged) {
+                            ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+                        }
                     });
-                    notifyClient((UInt8*)"0;;Lock requested\r\n", writeStreamRef);
+                    notifyClient((UInt8*)"0;;Lock queued with 3s power guard\r\n", writeStreamRef);
                 } else {
                     notifyClient((UInt8*)"1;;SpringBoard lock API unavailable\r\n", writeStreamRef);
                 }
