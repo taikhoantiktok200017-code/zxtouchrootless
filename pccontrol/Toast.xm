@@ -117,7 +117,7 @@ void showToastFromRawData(UInt8 *eventData, NSError **error)
             windowLeftTopCornerY = (int)((screenHeight - contentSize.height - 50)/scale);
         }
 
-        if (@available(iOS 11.0, *)) {
+        if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){ 11, 0, 0 }]) {
             UIWindowScene *scene = (UIWindowScene *)[[UIApplication sharedApplication].connectedScenes anyObject];
             UIWindow *anyWindow = scene.windows.firstObject;
             CGFloat bottomPadding = anyWindow ? anyWindow.safeAreaInsets.bottom : 0;

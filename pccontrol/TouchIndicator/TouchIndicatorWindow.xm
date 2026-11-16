@@ -643,7 +643,7 @@ static void IOHIDEventCallbackForTouchIndicator(void* target, void* refcon, IOHI
         }
         _window.autoresizingMask = indicatorLocksToPortrait ? UIViewAutoresizingNone :
             (UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin);
-        if (@available(iOS 16.0, *)) {
+        if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){ 16, 0, 0 }]) {
             [_window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
         } else {
             [UIViewController attemptRotationToDeviceOrientation];

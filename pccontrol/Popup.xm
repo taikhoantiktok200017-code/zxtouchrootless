@@ -28,7 +28,7 @@ static UIButton* makeBtn(NSString *title, UIColor *color) {
 }
 
 static UIImage *panelSymbol(NSString *name) {
-    if (@available(iOS 13.0, *)) {
+    if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){ 13, 0, 0 }]) {
         return [UIImage systemImageNamed:name];
     }
     return nil;
