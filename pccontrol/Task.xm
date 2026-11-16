@@ -32,13 +32,13 @@ static BOOL VF5StopTouchCodes(const UInt8 **down, const UInt8 **up) {
         fabs(MAX(nativeSize.width, nativeSize.height) - 1334.0) > 1.0) return NO;
 
     switch ([Screen getScreenOrientation]) {
-        case UIInterfaceOrientationLandscapeLeft:
-            // Landscape-only candidate; native touch still requires device validation.
+        case UIInterfaceOrientationLandscapeRight:
+            // Observed orientation=3 with volume buttons down; native touch still needs verification.
             *down = (const UInt8 *)"11000120006640";
             *up   = (const UInt8 *)"10000120006640";
             return YES;
         default:
-            return NO; // VF5 dashcam supports Landscape Left only.
+            return NO; // VF5 dashcam supports the measured landscape orientation only.
     }
 }
 
