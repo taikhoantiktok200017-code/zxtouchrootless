@@ -26,6 +26,26 @@ extern CFRunLoopRef recordRunLoop;
 
 static BOOL VF5StopPending = NO;
 
+static BOOL VF5StopTouchCodes(const UInt8 **down, const UInt8 **up) {
+    CGSize nativeSize = [UIScreen mainScreen].nativeBounds.size;
+    if (fabs(MIN(nativeSize.width, nativeSize.height) - 750.0) > 1.0 ||
+        fabs(MAX(nativeSize.width, nativeSize.height) - 1334.0) > 1.0) return NO;
+
+    switch ([Screen getScreenOrientation]) {
+        case UIInterfaceOrientationPortrait:
+            *down = (const UInt8 *)"11000370011700";
+            *up   = (const UInt8 *)"10000370011700";
+            return YES;
+        case UIInterfaceOrientationLandscapeLeft:
+            // Calibrated on iPhone 7/iOS 15.8.8 with Droid's Stop at WDA (332, 315).
+            *down = (const UInt8 *)"11000120006640";
+            *up   = (const UInt8 *)"10000120006640";
+            return YES;
+        default:
+            return NO; // Other rotations need physical calibration.
+    }
+}
+
 // The charger shortcut calls this inside SpringBoard. Never lock until the
 // newest recording has a complete MP4 index and has stopped changing.
 static void VF5Log(NSString *message) {
@@ -171,9 +191,9 @@ static void VF5WaitForSavedClip(NSString *path, BOOL unplug, NSUInteger tries,
 }
 
 static void VF5StopAndVerify(BOOL unplug) {
-    CGSize size = [UIScreen mainScreen].bounds.size;
-    if (fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
-        VF5Log(@"CANCEL not iPhone 7 portrait; Stop coordinates unsafe");
+    const UInt8 *down = NULL, *up = NULL;
+    if (!VF5StopTouchCodes(&down, &up)) {
+        VF5Log(@"CANCEL unsupported device or display orientation; Stop coordinates unsafe");
         VF5StopPending = NO;
         return;
     }
@@ -189,9 +209,9 @@ static void VF5StopAndVerify(BOOL unplug) {
         VF5StopPending = NO;
         return;
     }
-    performTouchFromRawData((UInt8*)"11000370011700");
+    performTouchFromRawData((UInt8 *)down);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-        performTouchFromRawData((UInt8*)"10000370011700");
+        performTouchFromRawData((UInt8 *)up);
         VF5Log(@"Stop tapped; waiting for finalized MP4");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             VF5WaitForSavedClip(path, unplug, 1, 0);
@@ -307,13 +327,13 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     ? [frontApp bundleIdentifier] : nil;
                 UIDevice *device = [UIDevice currentDevice];
                 device.batteryMonitoringEnabled = YES;
-                CGSize size = [UIScreen mainScreen].bounds.size;
+                const UInt8 *down = NULL, *up = NULL;
                 if (![bundleId isEqualToString:@"com.helge.droiddashcam"] ||
                     device.batteryState == UIDeviceBatteryStateUnknown ||
                     (unplug ? device.batteryState != UIDeviceBatteryStateUnplugged :
                         device.batteryState == UIDeviceBatteryStateUnplugged) ||
-                    fabs(size.width - 375.0) > 1.0 || fabs(size.height - 667.0) > 1.0) {
-                    notifyClient((UInt8*)"1;;Stop test requires Droid foreground, portrait iPhone 7 and external power\r\n", writeStreamRef);
+                    !VF5StopTouchCodes(&down, &up)) {
+                    notifyClient((UInt8*)"1;;Stop test requires Droid foreground, supported iPhone 7 orientation and expected power\r\n", writeStreamRef);
                 } else {
                     // Debounce unplug events; a reconnect must cancel the Stop tap.
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (unplug ? 2 : 0) * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -323,9 +343,11 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                         id currentApp = getFrontMostApplication();
                         if (![currentApp respondsToSelector:@selector(bundleIdentifier)] ||
                             ![[currentApp bundleIdentifier] isEqualToString:@"com.helge.droiddashcam"]) return;
-                        performTouchFromRawData((UInt8*)"11000370011700");
+                        const UInt8 *tapDown = NULL, *tapUp = NULL;
+                        if (!VF5StopTouchCodes(&tapDown, &tapUp)) return;
+                        performTouchFromRawData((UInt8 *)tapDown);
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                            performTouchFromRawData((UInt8*)"10000370011700");
+                            performTouchFromRawData((UInt8 *)tapUp);
                         });
                     });
                     notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
