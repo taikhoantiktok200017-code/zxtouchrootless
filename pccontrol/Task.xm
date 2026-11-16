@@ -32,17 +32,13 @@ static BOOL VF5StopTouchCodes(const UInt8 **down, const UInt8 **up) {
         fabs(MAX(nativeSize.width, nativeSize.height) - 1334.0) > 1.0) return NO;
 
     switch ([Screen getScreenOrientation]) {
-        case UIInterfaceOrientationPortrait:
-            *down = (const UInt8 *)"11000370011700";
-            *up   = (const UInt8 *)"10000370011700";
-            return YES;
         case UIInterfaceOrientationLandscapeLeft:
-            // Calibrated on iPhone 7/iOS 15.8.8 with Droid's Stop at WDA (332, 315).
+            // Landscape-only candidate; native touch still requires device validation.
             *down = (const UInt8 *)"11000120006640";
             *up   = (const UInt8 *)"10000120006640";
             return YES;
         default:
-            return NO; // Other rotations need physical calibration.
+            return NO; // VF5 dashcam supports Landscape Left only.
     }
 }
 
@@ -353,6 +349,18 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     notifyClient((UInt8*)"0;;Stop tap queued; confirm recording and MP4 before enabling automation\r\n", writeStreamRef);
                 }
                 }
+            } else if (strcmp((const char *)eventData, "vf5-status") == 0) {
+                UIDevice *device = [UIDevice currentDevice];
+                device.batteryMonitoringEnabled = YES;
+                id app = getFrontMostApplication();
+                NSString *bundle = [app respondsToSelector:@selector(bundleIdentifier)]
+                    ? [app bundleIdentifier] : @"(none)";
+                CGSize size = [UIScreen mainScreen].nativeBounds.size;
+                NSString *message = [NSString stringWithFormat:
+                    @"0;;VF5 app=%@ orientation=%d battery=%ld native=%.0fx%.0f touch=%.0fx%.0f\r\n",
+                    bundle, [Screen getScreenOrientation], (long)device.batteryState,
+                    size.width, size.height, [Screen getScreenWidth], [Screen getScreenHeight]];
+                notifyClient((UInt8 *)[message UTF8String], writeStreamRef);
             } else if (strcmp((const char *)eventData, "vf5-file-probe") == 0) {
                 Class proxyClass = NSClassFromString(@"LSApplicationProxy");
                 SEL lookup = NSSelectorFromString(@"applicationProxyForIdentifier:");
