@@ -104,7 +104,8 @@ static BOOL VF5MP4Finalized(NSString *path, unsigned long long *lengthOut) {
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     unsigned long long length = [attrs[NSFileSize] unsignedLongLongValue];
     if (lengthOut) *lengthOut = length;
-    if (length < 1024 * 1024) return NO;
+    // A valid short recording can be far below 1 MB; atom validation guards truncation.
+    if (length < 32) return NO;
     NSFileHandle *file = [NSFileHandle fileHandleForReadingAtPath:path];
     if (!file) return NO;
     BOOL ftyp = NO, mdat = NO, moov = NO, valid = YES;
