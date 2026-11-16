@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout
@@ -161,4 +161,3 @@ jobs:
             2. Install via Filza or SSH: `dpkg -i <file>.deb && killall -9 SpringBoard`
 
             > Python 3 from Procursus is required for `.py` scripts.
-
