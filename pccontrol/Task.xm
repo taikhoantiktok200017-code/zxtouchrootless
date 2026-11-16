@@ -187,15 +187,15 @@ static void VF5WaitForSavedClip(NSString *path, BOOL unplug, NSUInteger tries,
     });
 }
 
-static void VF5StopAndVerify(BOOL unplug) {
+static void VF5StopAndVerify(BOOL unplug, NSUInteger foregroundRetries) {
     const UInt8 *down = NULL, *up = NULL;
     if (!VF5StopTouchCodes(&down, &up)) {
         VF5Log(@"CANCEL unsupported device or display orientation; Stop coordinates unsafe");
         VF5StopPending = NO;
         return;
     }
-    if (!VF5PowerMatches(unplug) || !VF5DroidForeground()) {
-        VF5Log(@"CANCEL power or foreground not ready");
+    if (!VF5PowerMatches(unplug)) {
+        VF5Log(@"CANCEL power no longer matches unplug trigger");
         VF5StopPending = NO;
         return;
     }
@@ -204,6 +204,22 @@ static void VF5StopAndVerify(BOOL unplug) {
     if (!path || VF5MP4Finalized(path, &bytes)) {
         VF5Log(@"CANCEL no fresh unfinished MP4; no Stop tap");
         VF5StopPending = NO;
+        return;
+    }
+    if (!VF5DroidForeground()) {
+        if (!unplug || foregroundRetries >= 4) {
+            VF5Log(@"CANCEL Droid did not return to foreground");
+            VF5StopPending = NO;
+            return;
+        }
+        // The Shortcuts shell action can bring Shortcuts ahead of Droid.
+        if (foregroundRetries == 0) {
+            VF5Log(@"RETRY restoring Droid foreground after charger shortcut");
+            bringAppForeground(@"com.helge.droiddashcam");
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            VF5StopAndVerify(unplug, foregroundRetries + 1);
+        });
         return;
     }
     performTouchFromRawData((UInt8 *)down);
@@ -315,7 +331,7 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
                     } else {
                         VF5StopPending = YES;
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (unplug ? 2 : 0) * NSEC_PER_SEC),
-                                       dispatch_get_main_queue(), ^{ VF5StopAndVerify(unplug); });
+                                       dispatch_get_main_queue(), ^{ VF5StopAndVerify(unplug, 0); });
                         notifyClient((UInt8*)"0;;Stop/MP4 verification queued; lock only on unplug and verified save\r\n", writeStreamRef);
                     }
                 } else {
