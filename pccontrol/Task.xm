@@ -25,6 +25,29 @@
 extern CFRunLoopRef recordRunLoop;
 
 static BOOL VF5StopPending = NO;
+static BOOL VF5StartPending = NO;
+
+static BOOL VF5SleepDisplay(void) {
+    // SpringBoard's actual hardware-button sleep path, verified by Triggr on iOS 15.8.
+    id springboard = [UIApplication sharedApplication];
+    id button = [springboard respondsToSelector:NSSelectorFromString(@"lockHardwareButton")]
+        ? [springboard performSelector:NSSelectorFromString(@"lockHardwareButton")] : nil;
+    id actions = [button respondsToSelector:NSSelectorFromString(@"buttonActions")]
+        ? [button performSelector:NSSelectorFromString(@"buttonActions")] : nil;
+    id interaction = [actions respondsToSelector:NSSelectorFromString(@"sleepWakeButtonInteraction")]
+        ? [actions performSelector:NSSelectorFromString(@"sleepWakeButtonInteraction")] : nil;
+    SEL sleep = NSSelectorFromString(@"_performSleep");
+    if ([interaction respondsToSelector:sleep]) {
+        ((void (*)(id, SEL))objc_msgSend)(interaction, sleep);
+        return YES;
+    }
+    SEL simulate = NSSelectorFromString(@"_simulateLockButtonPress");
+    if ([springboard respondsToSelector:simulate]) {
+        ((void (*)(id, SEL))objc_msgSend)(springboard, simulate);
+        return YES;
+    }
+    return NO;
+}
 
 static BOOL VF5StopTouchCodes(const UInt8 **down, const UInt8 **up) {
     CGSize nativeSize = [UIScreen mainScreen].nativeBounds.size;
@@ -172,9 +195,12 @@ static void VF5WaitForSavedClip(NSString *path, BOOL unplug, NSUInteger tries,
             VF5StopPending = NO;
             return;
         }
-        VF5Log([NSString stringWithFormat:@"PASS finalized MP4 size=%llu; locking", length]);
+        VF5Log([NSString stringWithFormat:@"PASS finalized MP4 size=%llu; sleeping display", length]);
         VF5StopPending = NO;
-        ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+        if (!VF5SleepDisplay()) {
+            VF5Log(@"FALLBACK screen sleep unavailable; locking only");
+            ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+        }
         return;
     }
     if (tries >= 15) {
@@ -228,6 +254,43 @@ static void VF5StopAndVerify(BOOL unplug, NSUInteger foregroundRetries) {
         VF5Log(@"Stop tapped; waiting for finalized MP4");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             VF5WaitForSavedClip(path, unplug, 1, 0);
+        });
+    });
+}
+
+static void VF5StartOnPlug(NSUInteger retries) {
+    const UInt8 *down = NULL, *up = NULL;
+    if (!VF5PowerMatches(NO)) {
+        VF5Log(@"CANCEL start power removed");
+        VF5StartPending = NO;
+        return;
+    }
+    if (!VF5DroidForeground() || !VF5StopTouchCodes(&down, &up)) {
+        if (retries >= 6) {
+            VF5Log(@"FAIL start Droid foreground/orientation unavailable");
+            VF5StartPending = NO;
+            return;
+        }
+        if (retries == 0 || retries == 3) bringAppForeground(@"com.helge.droiddashcam");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            VF5StartOnPlug(retries + 1);
+        });
+        return;
+    }
+    NSString *path = VF5LatestRecording();
+    if (path && !VF5MP4Finalized(path, NULL)) {
+        VF5Log(@"PASS start already recording; no duplicate tap");
+        VF5StartPending = NO;
+        return;
+    }
+    performTouchFromRawData((UInt8 *)down);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        performTouchFromRawData((UInt8 *)up);
+        VF5Log(@"Start tapped; awaiting new MP4");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            NSString *fresh = VF5LatestRecording();
+            VF5Log(fresh && !VF5MP4Finalized(fresh, NULL) ? @"PASS start new MP4 active" : @"FAIL start MP4 not detected");
+            VF5StartPending = NO;
         });
     });
 }
@@ -318,7 +381,16 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     else if (taskType == TASK_RUN_SHELL)
     {
         @autoreleasepool{
-            if (strcmp((const char *)eventData, "vf5-stop-test") == 0 ||
+            if (strcmp((const char *)eventData, "vf5-start-plug") == 0) {
+                if (VF5StartPending || VF5StopPending) {
+                    notifyClient((UInt8*)"1;;VF5 transition already in progress\r\n", writeStreamRef);
+                } else {
+                    VF5StartPending = YES;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                                   dispatch_get_main_queue(), ^{ VF5StartOnPlug(0); });
+                    notifyClient((UInt8*)"0;;Start queued on charging state\r\n", writeStreamRef);
+                }
+            } else if (strcmp((const char *)eventData, "vf5-stop-test") == 0 ||
                 strcmp((const char *)eventData, "vf5-stop-unplug") == 0 ||
                 strcmp((const char *)eventData, "vf5-stop-verify-test") == 0) {
                 // Test-only command. Never call from a charger automation until
