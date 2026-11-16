@@ -1,0 +1,45 @@
+name: Build VF5 tweak on Ubuntu
+on:
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  build-vf5:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang make perl dpkg-dev libssl-dev git curl unzip
+      - name: Install roothide Theos
+        env:
+          THEOS: ${{ github.workspace }}/theos
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+      - name: Compile SpringBoard tweak only
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: make -C pccontrol THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
+      - name: Retrieve last verified application package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 43856692589 --repo "${{ github.repository }}" --name ZXTouch-rootless-deb --dir /tmp/vf5-base
+      - name: Merge new tweak into verified package
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vf5-unpacked artifacts
+          BASE=$(find /tmp/vf5-base -name '*.deb' -print -quit)
+          NEW=$(find pccontrol/.theos/obj -name pccontrol.dylib -print -quit)
+          test -n "$BASE" && test -n "$NEW"
+          dpkg-deb --raw-extract "$BASE" /tmp/vf5-unpacked
+          OLD=$(find /tmp/vf5-unpacked -name pccontrol.dylib -print -quit)
+          test -n "$OLD"
+          cp "$NEW" "$OLD"
+          sed -i 's/^Version: .*/Version: 1.0.9+vf5/' /tmp/vf5-unpacked/DEBIAN/control
+          dpkg-deb --build /tmp/vf5-unpacked artifacts/com.zjx.ioscontrol_1.0.9+vf5_rootless.deb
+          dpkg-deb -f artifacts/*.deb Package Version Architecture
+          sha256sum artifacts/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VF5-1.0.9-rootless
+          path: artifacts/*.deb
