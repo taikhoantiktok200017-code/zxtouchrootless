@@ -1,5 +1,7 @@
 name: Build VF5 tweak on Ubuntu
 on:
+  push:
+    branches: [vf5-localhost-6000]
   workflow_dispatch:
 permissions:
   actions: read
