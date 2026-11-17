@@ -49,6 +49,17 @@ static BOOL VF5SleepDisplay(void) {
     return NO;
 }
 
+static BOOL VF5ReturnHome(void) {
+    Class cls = NSClassFromString(@"SBUIController");
+    SEL shared = NSSelectorFromString(@"sharedInstance");
+    SEL home = NSSelectorFromString(@"clickedMenuButton");
+    id controller = (cls && [cls respondsToSelector:shared])
+        ? ((id (*)(id, SEL))objc_msgSend)(cls, shared) : nil;
+    if (!controller || ![controller respondsToSelector:home]) return NO;
+    ((BOOL (*)(id, SEL))objc_msgSend)(controller, home);
+    return YES;
+}
+
 static BOOL VF5StopTouchCodes(const UInt8 **down, const UInt8 **up) {
     CGSize nativeSize = [UIScreen mainScreen].nativeBounds.size;
     if (fabs(MIN(nativeSize.width, nativeSize.height) - 750.0) > 1.0 ||
@@ -195,12 +206,24 @@ static void VF5WaitForSavedClip(NSString *path, BOOL unplug, NSUInteger tries,
             VF5StopPending = NO;
             return;
         }
-        VF5Log([NSString stringWithFormat:@"PASS finalized MP4 size=%llu; sleeping display", length]);
-        VF5StopPending = NO;
-        if (!VF5SleepDisplay()) {
-            VF5Log(@"FALLBACK screen sleep unavailable; locking only");
-            ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
-        }
+        VF5Log([NSString stringWithFormat:@"PASS finalized MP4 size=%llu; returning Home", length]);
+        BOOL homeRequested = VF5ReturnHome();
+        if (!homeRequested) VF5Log(@"FAIL Home API unavailable; will still sleep after safe save");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            if (!VF5PowerMatches(YES)) {
+                VF5Log(@"CANCEL reconnected before screen sleep");
+                VF5StopPending = NO;
+                return;
+            }
+            VF5Log(VF5DroidForeground() ? @"WARN Home not confirmed" : @"PASS Home transition confirmed");
+            if (!VF5SleepDisplay()) {
+                VF5Log(@"FALLBACK sleep API unavailable; requesting lock UI");
+                ((void (*)(id, SEL, int, id))objc_msgSend)(manager, lock, 1, nil);
+            } else {
+                VF5Log(@"Screen sleep requested");
+            }
+            VF5StopPending = NO;
+        });
         return;
     }
     if (tries >= 15) {

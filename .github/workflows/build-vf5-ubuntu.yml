@@ -35,12 +35,12 @@ jobs:
           OLD=$(find /tmp/vf5-unpacked -name pccontrol.dylib -print -quit)
           test -n "$OLD"
           cp "$NEW" "$OLD"
-          sed -i 's/^Version: .*/Version: 1.0.9+vf5/' /tmp/vf5-unpacked/DEBIAN/control
-          dpkg-deb --build /tmp/vf5-unpacked artifacts/com.zjx.ioscontrol_1.0.9+vf5_rootless.deb
+          sed -i 's/^Version: .*/Version: 1.0.10+vf5/' /tmp/vf5-unpacked/DEBIAN/control
+          dpkg-deb --build /tmp/vf5-unpacked artifacts/com.zjx.ioscontrol_1.0.10+vf5_rootless.deb
           dpkg-deb -f artifacts/*.deb Package Version Architecture
           sha256sum artifacts/*.deb
       - uses: actions/upload-artifact@v4
         with:
-          name: VF5-1.0.9-rootless
+          name: VF5-1.0.10-rootless
           path: artifacts/*.deb
 
